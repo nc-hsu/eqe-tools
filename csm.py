@@ -7,13 +7,16 @@ Fajfar 2000
 Freeman 1998
 """
 import os
-import matplotlib
+from tkinter.constants import N
 import numpy as np
 import tkinter as tk
 import matplotlib.pyplot as plt
 from pathlib import Path
 from tkinter import filedialog
-from nptyping import NDArray, Float64 
+from nptyping import NDArray, Float64
+from numpy.core.shape_base import vstack 
+
+GRAVITY = 9.81  # m/s²
 
 
 def select_folder(title: str ='') -> str:
@@ -112,6 +115,22 @@ def np_2_csv(a: NDArray, f_name: str, folder: Path) -> None:
     return
 
 
+def find_index(arr, val, comp: str='>', n: int=1) -> int:
+
+    if comp == '>':
+        idx = np.where((arr > val) == True)[0][n-1]
+    elif comp == '>=':
+        idx = np.where((arr >= val) == True)[0][n-1]
+    elif comp == '<':
+        idx = np.where((arr < val) == True)[0][n-1]
+    elif comp == '<=':
+        idx = np.where((arr <= val) == True)[0][n-1]
+    elif comp == '==':
+        idx = np.where((arr == val) == True)[0][n-1]
+    
+    return idx
+
+
 def reformat_spectra() -> None:
     """reformats the spectra files in a folder to include the period
     """
@@ -187,7 +206,6 @@ def plot_spectrum(spectra: NDArray, format: str='ADRS') -> None:
         format (str, optional): plot type. One of 'ADRS', 'SA' or 'SD'.
                                 Defaults to 'ADRS'.
     """
-    
     # TODO - add titles and make the plot look prettier
     plt.figure()
     ax = plt.gca()
@@ -204,7 +222,7 @@ def plot_spectrum(spectra: NDArray, format: str='ADRS') -> None:
     return
 
 
-def load_pushover(f_name: str, folder_path: Path,
+def load_po(f_name: str, folder_path: Path,
                   header: bool=True) -> NDArray:
     
     """load pushover curve into two np.arrays
@@ -212,7 +230,6 @@ def load_pushover(f_name: str, folder_path: Path,
     Returns:
         NDArray: pushover curve
     """
-    
     file_path = folder_path / f_name 
 
     if header:
@@ -223,47 +240,42 @@ def load_pushover(f_name: str, folder_path: Path,
     return data
 
 
-def plot_pushover(pushover: NDArray) -> None:
+def plot_po(po: NDArray) -> None:
 
     # TODO - add titles and make the plot look prettier
     plt.figure()
     ax = plt.gca()
-    ax.plot(pushover[:,1], pushover[:,0])
+    ax.plot(po[:,1], po[:,0])
     plt.show()
 
     return
 
 
-def plot_capacity_spectrum(capacity_spectrum: NDArray) -> None:
+def plot_capacity_spectrum(cs: NDArray) -> None:
 
     # TODO - add titles and make the plot look prettier
     plt.figure()
     ax = plt.gca()
-    ax.plot(capacity_spectrum[:,0], capacity_spectrum[:,1])
+    ax.plot(cs[:,0], cs[:,1])
     plt.show()
 
     return
 
 
-def plot_capacity_demand_spectrum(capacity_spectrum: NDArray,
-                                  demand_spectrum: NDArray) -> None:
+def plot_cs_ds(cs: NDArray,
+                                  ds: NDArray) -> None:
 
     # TODO - add titles and make the plot look prettier
     plt.figure()
     ax = plt.gca()
-    ax.plot(capacity_spectrum[:,0], capacity_spectrum[:,1])
-    ax.plot(demand_spectrum[:,0], demand_spectrum[:,1])
+    ax.plot(cs[:,0], cs[:,1])
+    ax.plot(ds[:,0], ds[:,1])
     plt.show()
     
     return
 
-
-def load_spectra():
-    # TODO
-    return
     
-    
-def pushover_2_capacity_spectrum(pushover: NDArray, w: list[float], 
+def po_2_capacity_spectrum(po: NDArray, w: list[float], 
                                  phi: list[float]) -> NDArray:
     # converts the force (V) and displacement (D) vectors for an
     # mdof system into an sdof system using the procedure described
@@ -276,18 +288,149 @@ def pushover_2_capacity_spectrum(pushover: NDArray, w: list[float],
     PF = sum(w * phi) / (sum(w * phi ** 2))     # participation factor
     ai = PF * sum(w * phi) / W
     
-    print(PF)
-    print(ai)
+    Sa = (po[:,0] / W) / ai
+    Sd = po[:,1] / (PF * phi[-1])
     
-    Sa = (pushover[:,0] / W) / ai
-    Sd = pushover[:,1] / (PF * phi[-1])
+    cs = arrays_2_matrix([Sd, Sa])
     
-    cap_spectrum = arrays_2_matrix([Sd, Sa])
-    
-    return cap_spectrum
+    return cs
 
 
+def simplify_cs_backbone(cs: NDArray ,type_: str='bi') -> NDArray:
+    # produces a simplified backbone curve using:
+    #        (1) bilinear approximation - 'bi'
+    # TODO   (2) trilinear approximation - 'tri'
+    # TODO   (3) quadrilinear approimation - 'quad'
+    
+    if type_ == 'bi':
+        simple_cs = cs_bilinear(cs)
+    
+    return simple_cs
 
+
+def cs_bilinear(cs: NDArray, mu: float=6, tol: float=0.0001) -> NDArray:
+    """ produces bilinear approximation of the provided capacity spectrum
+        Assumes the following:
+           (1) elastic-perfectly plastic
+           (2) areas under the curve match within tolerance
+           (3) fitted intial stiffness crosses at 0.6*Fy
+
+    Args:
+        cs (NDArray): capacity spectrum
+        mu (float, optional): maximum ductility to compute fit. Defaults to 6.
+        tol (float, optional): tolerance of difference of areas. 
+                               Defaults to 0.0001.
+
+    Returns:
+        NDArray: the bilinearised capacity spectrum
+    """
+    Fyi = [np.max(cs[:,1])] # fist guess of yield point - assume max
+    Fy_idx = np.argmax(cs[:,1])
+    
+    diff = 1    # diff normalised by proportion of area under bilin. curve
+    count = 0
+    
+    while diff > tol and count < 1000:
+        # determine displacement of delta_y intersection
+        F_cross = 0.6 * Fyi[-1]
+        D_cross = np.interp(F_cross, cs[:,1][0:Fy_idx], cs[:,0][0:Fy_idx])
+        Dyi = D_cross / 0.6
+        
+        # maximum displacement at which to calculate the area
+        Dmax = min(mu * Dyi, cs[:,0][-1])
+
+        # determine area under bilinear curve
+        A_bi = (Dyi / 2 + (Dmax - Dyi)) * Fyi[-1]
+         
+        # determine the area under the pushover curve
+        d_idx = np.where((cs[:,0] >= Dmax) == True)[0][0]
+        cs_trunc = cs[0:d_idx+1,:].copy()
+        cs_trunc[-1,0] = np.interp(Dmax, cs_trunc[:,0], cs_trunc[:, 1])
+        cs_trunc[-1,1] = Dmax
+        A_cs = np.trapz(cs_trunc[:, 1], cs_trunc[:,0])  # Area 
+        
+        # check whether not the areas are within the tolerance
+        diff = (A_bi - A_cs)
+        if abs(diff) > tol:
+            # update the guess of Fy
+            if diff > 0:
+                Fyi.append(Fyi[-1]-0.001*Fyi[0])
+            elif diff < 0:
+                Fyi.append(Fyi[-1]+0.0005*Fyi[0])
+
+        count += 1   
+          
+    # final bilinear cs curve
+    cs_bi = np.transpose(np.array([[0, Dyi, Dmax],
+                                   [0, Fyi[-1], Fyi[-1]]]))
+
+    return cs_bi
+
+   
+def cs_resample(cs: NDArray, delta: float=0.001, type_: str='bi') -> NDArray:
+    # resamples the post yield simplified cs with points spaced by delta.
+    # TODO trilinear type
+    # TODO bilinear type
+    
+    delta_p = cs[2,0] - cs[1,0]
+    n = round(delta_p / delta)
+    d_max = cs[1,0] + (n * delta)
+    
+    if type_ == 'bi':
+        ds = np.arange(cs[1,0], d_max, step=delta)
+        fs = np.interp(ds, cs[:,0], cs[:,1])
+        new_vals = arrays_2_matrix([ds, fs], cols=True)
+        cs_re = np.vstack((cs[0,:], new_vals))
+        
+    return cs_re
+    
+ 
+def cs_mus(cs: NDArray) -> NDArray: 
+    # yield point is always row index one
+    return cs[1:,0] / cs[1,0]
+    
+            
+def cs_Ti(cs: NDArray) -> float:
+    # yield point is always row index one
+    return 4 * np.pi ** 2 * cs[1,0] / cs[1,1] / GRAVITY
+
+
+def cs_Teffs(Ti: float, mu: NDArray, r: float=0.0) -> NDArray:
+    # TODO modify for tri and quadlinear
+    return np.sqrt(mu / (1 + r * (mu - 1))) * Ti
+
+
+def cs_ksis(mu: NDArray, C: float) -> NDArray:
+
+    return 0.05 + C * (mu - 1) / (np.pi * mu)
+    
+    
+def cs_etas(ksi: NDArray) -> NDArray:
+
+    return np.sqrt(0.07 / (0.02 + ksi))
+    
+
+def ds_resample(ds: NDArray, Teffs: NDArray) -> NDArray:
+
+    # find first fist row index where Teff > T
+    idx = find_index(ds[:,2], Teffs[0], '>')
+    # split matrix
+    ds1 = ds[0:idx, :].copy()
+    ds2 = ds[idx:, :].copy()
+    # resample sd and sa for Teffs
+    new_sd = np.interp(Teffs, ds2[:,2], ds2[:,0])
+    new_sa = np.interp(Teffs, ds2[:,2], ds2[:,1])
+    new_ds2 = arrays_2_matrix([new_sd, new_sa, Teffs])
+    # recombine
+    ds_re = vstack((ds1, new_ds2))
+    
+    return ds_re
+    
+    
+   
+   
+def variable_damping_spectra():
+    return
 
 
 if __name__ == "__main__":
@@ -295,7 +438,7 @@ if __name__ == "__main__":
     # folder = Path('C:/niccl/git_repos/eqe-tools')
     # file = 'test_pushover.csv'
 
-    # V, D = load_pushover(file, folder)
+    # V, D = load_po(file, folder)
     
     # for v, d in zip(V[:10], D[:10]):
     #     print(v,d)
@@ -314,16 +457,48 @@ if __name__ == "__main__":
     # plot_spectrum(spectra, format='SD')
     folder = Path('C:/niccl/Documents/RELUIS-PROJEKT/nls_analysis_results/'
                   'pushover/par')
-    pcurve = load_pushover('A1_x_FD_par.csv', folder)
+    po = load_po('A1_x_FD_par.csv', folder)
     # plot_pushover(pcurve)
     w = [859.9, 3383.9, 2238.3]
     phi = [0.333, 0.667, 1.000]
     
-    cap_spec = pushover_2_capacity_spectrum(pcurve, w ,phi)
+    cs = po_2_capacity_spectrum(po, w ,phi)
     
-    spectra_folder = Path('C:/niccl/Documents/RELUIS-PROJEKT/record_selection'
+    ds_folder = Path('C:/niccl/Documents/RELUIS-PROJEKT/record_selection'
                           '/IsolaGranSasso_Data/spectra_ADRS/2475')
-    file = 'Spectrum_EQ_1RotD50.csv'
-    dem_spec = np.loadtxt(spectra_folder / file, delimiter=',')
-    plot_capacity_demand_spectrum(cap_spec, dem_spec)
+    ds_file = 'Spectrum_EQ_5RotD50.csv'
+    ds = np.loadtxt(ds_folder / ds_file, delimiter=',')
     
+    cs_bi = cs_bilinear(cs)
+    cs_bi = cs_resample(cs_bi)
+    
+    mus = cs_mus(cs_bi)
+    Ti = cs_Ti(cs_bi)
+    Teffs = cs_Teffs(Ti, mus)
+    
+    C = 0.565
+    
+    ksis = cs_ksis(mus, C)
+    etas = cs_etas(ksis)
+    
+    ds_re = ds_resample(ds, Teffs)
+    print('ds shape: ', np.shape(ds))
+    print('ds_re shape: ', np.shape(ds_re))
+    print(len(Teffs))
+    print(cs_bi)
+    
+    T1 = np.array([[0,0],[0.06507, 1.1655]])
+    T = np.array([[0,0],[0.32007, 1.1655]])
+    # plot_cs_ds(cs_bi, ds_re)
+    
+    # print(cs_bi)
+    # print()
+    # print(cs)
+    # # plot_cs_ds(cs_bi, ds)
+    # # plot_cs_ds(cs, ds)
+    plt.figure()
+    ax = plt.gca()
+    ax.plot(T[:,0], T[:,1], cs_bi[:,0], cs_bi[:,1], ds_re[:,0], ds_re[:,1], T1[:,0], T1[:,1])
+    ax.plot(0.0592,1.0781, marker='o', mfc='red', mec='k')
+    ax.plot(cs[:,0], cs[:,1],)
+    plt.show()
