@@ -7,33 +7,13 @@ Fajfar 2000
 Freeman 1998
 """
 import os
+import matplotlib
 import numpy as np
 import tkinter as tk
+import matplotlib.pyplot as plt
 from pathlib import Path
-from typing import Tuple
 from tkinter import filedialog
 from nptyping import NDArray, Float64 
-
-
-def load_pushover(f_name: str, folder_path: str,
-                  header: bool=True) -> NDArray[Float64]:
-    
-    """load pushover curve into two np.arrays
-
-    Returns:
-        NDArray[Float64]: pushover curve
-    """
-    
-    folder_path = Path(folder_path)
-    file_path = folder_path / f_name 
-
-    with open(file_path, 'r') as file:
-        if header:
-            data = np.loadtxt(file, skiprows=1, delimiter=',')
-        else:
-            data = np.loadtxt(file, delimiter=',')
-    
-    return data
 
 
 def select_folder(title: str ='') -> str:
@@ -77,7 +57,7 @@ def filepaths_from_folder(folder_path: Path) -> list:
     return file_paths
 
 
-def format_spectrum(file_path: Path, Tmax: float=4.0) -> NDArray[Float64]:
+def format_spectrum(file_path: Path, Tmax: float=4.0) -> NDArray:
     """adds period values to response spectra files containing only 
     spectral values
 
@@ -87,26 +67,26 @@ def format_spectrum(file_path: Path, Tmax: float=4.0) -> NDArray[Float64]:
                                 Defaults to 4.0.
 
     Returns:
-        NDArray[Float64]: Nx2 array with row = period/value pairs 
+        NDArray: Nx2 array with row = period/value pairs 
     """
 
     spectra = np.loadtxt(file_path)
     L = len(spectra)
     Ts = np.linspace(0, Tmax, L)
 
-    return arrays_2_mat([Ts, spectra])
+    return arrays_2_matrix([Ts, spectra])
 
 
-def arrays_2_mat(arrays: list[NDArray[Float64]],
-                 cols: bool=True) -> NDArray[Float64]:
+def arrays_2_matrix(arrays: list[NDArray],
+                 cols: bool=True) -> NDArray:
     """reshapes numpy vectors so that they can be stacked to form NDArrays
 
     Args:
-        arrays (list[NDArray[Float64]]): vectors to be stacked
+        arrays (list[NDArray]): vectors to be stacked
         cols (bool, optional): use vectors as columns or rows. Defaults to True.
 
     Returns:
-        NDArray[Float64]: matrix of stacked vectors
+        NDArray: matrix of stacked vectors
     """
 
     if cols:
@@ -119,11 +99,11 @@ def arrays_2_mat(arrays: list[NDArray[Float64]],
     return data 
 
 
-def np_2_csv(a: NDArray[Float64], f_name: str, folder: Path) -> None:
+def np_2_csv(a: NDArray, f_name: str, folder: Path) -> None:
     """saves a numpy array, a, to a csv file
 
     Args:
-        a (NDArray[Float64]): np array to be saved
+        a (NDArray): np array to be saved
         f_name (str): name of new file without extension
         folder (Path): path to folder for new file
     """
@@ -154,18 +134,29 @@ def reformat_spectra() -> None:
 
 
 def format_ADRS_spectrum(sd_file: Path, sa_file: Path,
-                         Tmax: float=4.0) -> NDArray[Float64]:
-    
+                         Tmax: float=4.0) -> NDArray:
+    """combines Sa, Sd, T values into one array
+
+    Args:
+        sd_file (Path): file containing Sd values
+        sa_file (Path): file containing Sa values
+        Tmax (float, optional): maximum period for spectra. Defaults to 4.0.
+
+    Returns:
+        NDArray: matrix of spectra and period values
+    """
     
     sd = np.loadtxt(sd_file)
     sa = np.loadtxt(sa_file)
     L = len(sd)
     Ts = np.linspace(0, Tmax, L)
 
-    return arrays_2_mat([sd, sa, Ts])
+    return arrays_2_matrix([sd, sa, Ts])
 
 
-def format_ADRS_spectra() -> NDArray[Float64]:
+def format_ADRS_spectra():
+    """formats multiple spectra files in a folder to include Sa and Sd
+    """
 
     # get sd components
     sd_folder = Path(select_folder(title='Select folder containing'
@@ -188,19 +179,115 @@ def format_ADRS_spectra() -> NDArray[Float64]:
     return
 
 
+def plot_spectrum(spectra: NDArray, format: str='ADRS') -> None:
+    """plots the response spectra in one of 3 formats. ADRS, SA or SD
+
+    Args:
+        spectra (NDArray): matrix of spectra data
+        format (str, optional): plot type. One of 'ADRS', 'SA' or 'SD'.
+                                Defaults to 'ADRS'.
+    """
+    
+    # TODO - add titles and make the plot look prettier
+    plt.figure()
+    ax = plt.gca()
+    
+    if format == 'ADRS':
+        ax.plot(spectra[:,0], spectra[:,1])
+    elif format == 'SA':
+        ax.plot(spectra[:,2], spectra[:,1])
+    elif format == 'SD':
+        ax.plot(spectra[:,2], spectra[:,0])
+
+    plt.show()
+
+    return
 
 
-def mdof_to_sdof(V, D, m, phi):
-    # TODO 
-    # converts the force (V) and displacement (D) vectors for an
-    # mdof system into an sdof system using the procedure described
-    # in Fajfar 2000
+def load_pushover(f_name: str, folder_path: Path,
+                  header: bool=True) -> NDArray:
+    
+    """load pushover curve into two np.arrays
+
+    Returns:
+        NDArray: pushover curve
+    """
+    
+    file_path = folder_path / f_name 
+
+    if header:
+        data = np.loadtxt(file_path, skiprows=1, delimiter=',')
+    else:
+        data = np.loadtxt(file_path, delimiter=',')
+    
+    return data
+
+
+def plot_pushover(pushover: NDArray) -> None:
+
+    # TODO - add titles and make the plot look prettier
+    plt.figure()
+    ax = plt.gca()
+    ax.plot(pushover[:,1], pushover[:,0])
+    plt.show()
+
+    return
+
+
+def plot_capacity_spectrum(capacity_spectrum: NDArray) -> None:
+
+    # TODO - add titles and make the plot look prettier
+    plt.figure()
+    ax = plt.gca()
+    ax.plot(capacity_spectrum[:,0], capacity_spectrum[:,1])
+    plt.show()
+
+    return
+
+
+def plot_capacity_demand_spectrum(capacity_spectrum: NDArray,
+                                  demand_spectrum: NDArray) -> None:
+
+    # TODO - add titles and make the plot look prettier
+    plt.figure()
+    ax = plt.gca()
+    ax.plot(capacity_spectrum[:,0], capacity_spectrum[:,1])
+    ax.plot(demand_spectrum[:,0], demand_spectrum[:,1])
+    plt.show()
+    
     return
 
 
 def load_spectra():
     # TODO
     return
+    
+    
+def pushover_2_capacity_spectrum(pushover: NDArray, w: list[float], 
+                                 phi: list[float]) -> NDArray:
+    # converts the force (V) and displacement (D) vectors for an
+    # mdof system into an sdof system using the procedure described
+    # in ATC40 (1996)
+    
+    w = np.array(w)
+    phi = np.array(phi)
+    W = sum(w)
+    
+    PF = sum(w * phi) / (sum(w * phi ** 2))     # participation factor
+    ai = PF * sum(w * phi) / W
+    
+    print(PF)
+    print(ai)
+    
+    Sa = (pushover[:,0] / W) / ai
+    Sd = pushover[:,1] / (PF * phi[-1])
+    
+    cap_spectrum = arrays_2_matrix([Sd, Sa])
+    
+    return cap_spectrum
+
+
+
 
 
 if __name__ == "__main__":
@@ -221,5 +308,22 @@ if __name__ == "__main__":
     # sp = format_spectrum(path)
     # np_2_csv(sp, 'new_spec', path.parent)
     
-    format_ADRS_spectra()
+    # f_path = Path('C:/niccl/Documents/RELUIS-PROJEKT/record_selection/'
+    #               'IsolaGranSasso_Data/spectra_ADRS/1463/Spectrum_EQ_1RotD50.csv')
+    # spectra = np.loadtxt(f_path, delimiter=',')
+    # plot_spectrum(spectra, format='SD')
+    folder = Path('C:/niccl/Documents/RELUIS-PROJEKT/nls_analysis_results/'
+                  'pushover/par')
+    pcurve = load_pushover('A1_x_FD_par.csv', folder)
+    # plot_pushover(pcurve)
+    w = [859.9, 3383.9, 2238.3]
+    phi = [0.333, 0.667, 1.000]
+    
+    cap_spec = pushover_2_capacity_spectrum(pcurve, w ,phi)
+    
+    spectra_folder = Path('C:/niccl/Documents/RELUIS-PROJEKT/record_selection'
+                          '/IsolaGranSasso_Data/spectra_ADRS/2475')
+    file = 'Spectrum_EQ_1RotD50.csv'
+    dem_spec = np.loadtxt(spectra_folder / file, delimiter=',')
+    plot_capacity_demand_spectrum(cap_spec, dem_spec)
     
